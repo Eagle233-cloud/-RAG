@@ -30,9 +30,39 @@ async def index() -> str:
 async def status() -> dict:
     return {
         **store.status(),
+        "data_dir": str(store.data_dir.resolve()),
+        "uploads_dir": str(store.uploads_dir.resolve()),
+        "chroma_dir": str((store.data_dir / "chroma").resolve()),
         "chat_model": settings.chat_model,
         "embed_model": settings.embed_model,
         "ollama_url": settings.ollama_base_url,
+    }
+
+
+@app.post("/api/settings/data-dir")
+async def set_data_dir(payload: dict[str, str]) -> dict[str, str | int]:
+    requested = payload.get("data_dir", "").strip()
+    if not requested:
+        return JSONResponse({"error": "请输入 RAG 数据库保存目录。"}, status_code=400)
+    data_dir = Path(requested).expanduser()
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        data_dir = data_dir.resolve()
+        global store
+        store = DocumentStore(
+            data_dir,
+            ollama,
+            settings.chunk_size,
+            settings.chunk_overlap,
+            settings.top_k,
+        )
+    except (OSError, ValueError) as exc:
+        return JSONResponse({"error": f"无法使用该保存目录：{exc}"}, status_code=400)
+    return {
+        "data_dir": str(store.data_dir),
+        "uploads_dir": str(store.uploads_dir),
+        "chroma_dir": str((store.data_dir / "chroma").resolve()),
+        **store.status(),
     }
 
 
@@ -60,6 +90,8 @@ async def ask(payload: dict[str, str]) -> dict:
     question = payload.get("question", "").strip()
     if not question:
         return JSONResponse({"error": "请输入问题。"}, status_code=400)
+    if not store.collection.count():
+        return {"answer": "目前没有已索引的文档，请先导入文档。", "sources": []}
     results = store.search(question)
     if not results:
         return {"answer": "目前没有已索引的文档。", "sources": []}
@@ -81,6 +113,9 @@ textarea{width:100%;min-height:90px;margin:.5rem 0} .muted{color:#6b7280}.error{
 ul{padding-left:1.2rem}
 </style></head><body><h1>本地文档 RAG</h1>
 <p class="muted">Ollama + Chroma · 支持 PDF、Word、Markdown、TXT</p>
+<section><h2>RAG 数据库位置</h2><p class="muted">请输入运行本应用的电脑上的文件夹路径。修改后，新导入的文档和索引会保存到该位置。</p>
+<input id="data-dir" type="text" style="width:75%" placeholder="例如：A:\\rag-data">
+<button onclick="saveDataDir()">保存位置</button><p id="data-dir-result"></p></section>
 <section><h2>导入文档</h2><input id="file" type="file" accept=".pdf,.docx,.md,.markdown,.txt">
 <button onclick="upload()">导入并建立索引</button> <button onclick="rebuild()">重建索引</button><p id="upload-result"></p></section>
 <section><h2>索引状态</h2><p id="status">加载中...</p><ul id="docs"></ul></section>
@@ -88,10 +123,10 @@ ul{padding-left:1.2rem}
 <button onclick="ask()">提问</button><div id="answer"></div></section>
 <script>
 async function call(url, options){const r=await fetch(url,options);const data=await r.json();if(!r.ok)throw Error(data.error||'请求失败');return data}
-async function refresh(){try{const s=await call('/api/status');document.querySelector('#status').textContent=`${s.documents} 个文档，${s.chunks} 个文本块；模型：${s.chat_model} / ${s.embed_model}`;document.querySelector('#docs').innerHTML=(await call('/api/status')).documents?'':'暂无文档';}catch(e){document.querySelector('#status').innerHTML='<span class="error">'+e.message+'</span>'}}
+async function refresh(){try{const s=await call('/api/status');document.querySelector('#status').innerHTML=`${s.documents} 个文档，${s.chunks} 个文本块；模型：${s.chat_model} / ${s.embed_model}<br><b>保存位置：</b>${s.data_dir}<br><span class="muted">上传文件：${s.uploads_dir}<br>Chroma 索引：${s.chroma_dir}</span>`;document.querySelector('#data-dir').value=s.data_dir;document.querySelector('#docs').innerHTML=s.documents?'':'暂无文档';}catch(e){document.querySelector('#status').innerHTML='<span class="error">'+e.message+'</span>'}}
+async function saveDataDir(){const p=document.querySelector('#data-dir-result');const dataDir=document.querySelector('#data-dir').value.trim();if(!dataDir){p.innerHTML='<span class="error">请输入保存目录。</span>';return}p.textContent='切换中...';try{const d=await call('/api/settings/data-dir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({data_dir:dataDir})});p.textContent=`已切换保存位置：${d.data_dir}`;refresh()}catch(e){p.innerHTML='<span class="error">'+e.message+'</span>'}}
 async function upload(){const f=document.querySelector('#file').files[0];if(!f)return;const p=document.querySelector('#upload-result');p.textContent='处理中...';try{const d=await call('/api/documents',{method:'POST',body:(()=>{const x=new FormData();x.append('file',f);return x})()});p.textContent=`已导入 ${d.filename}（${d.chunks} 个文本块）`;refresh()}catch(e){p.innerHTML='<span class="error">'+e.message+'</span>'}}
 async function rebuild(){try{const d=await call('/api/rebuild',{method:'POST'});document.querySelector('#upload-result').textContent=`已重建 ${d.documents} 个文档`;refresh()}catch(e){document.querySelector('#upload-result').innerHTML='<span class="error">'+e.message+'</span>'}}
-async function ask(){const a=document.querySelector('#answer');a.textContent='生成回答中...';try{const d=await call('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:document.querySelector('#question').value})});a.innerHTML='<p>'+d.answer.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('\\n','<br>')+'</p><p class="source"><b>来源：</b>'+d.sources.map(x=>x.filename).join('、')+'</p>'}catch(e){a.innerHTML='<p class="error">'+e.message+'</p>'}}
+async function ask(){const a=document.querySelector('#answer');const question=document.querySelector('#question').value.trim();if(!question){a.innerHTML='<p class="error">请输入问题后再提问。</p>';return}a.textContent='生成回答中...';try{const d=await call('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question})});a.innerHTML='<p>'+d.answer.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('\\n','<br>')+'</p><p class="source"><b>来源：</b>'+d.sources.map(x=>x.filename).join('、')+'</p>'}catch(e){a.innerHTML='<p class="error">'+e.message+'</p>'}}
 refresh()
 </script></body></html>"""
-

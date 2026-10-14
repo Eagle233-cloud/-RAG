@@ -4,4 +4,4 @@ __pycache__/
 .env
 data/
 *.py[cod]
-
+*.code-workspace

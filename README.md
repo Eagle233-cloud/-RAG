@@ -9,6 +9,8 @@
 - 使用 Chroma 持久化保存本地索引
 - 使用 Ollama 生成文档向量和问答结果
 - 提供简单的 Web 页面，用于上传文档、查看索引状态和提问
+- 可在 Web 页面中切换 RAG 数据库保存目录
+- 在索引状态中显示当前数据目录、上传文件目录和 Chroma 索引目录
 - 回答中返回相关文档来源
 - 检测并提示以下常见问题：
   - Ollama 服务未启动或无法连接
@@ -26,6 +28,12 @@
 - 已准备一个聊天模型和一个嵌入模型
 
 ## 安装与启动
+
+请先进入项目目录。后续命令必须在包含 `app` 文件夹的目录中执行：
+
+```powershell
+Set-Location A:\copilot_home\RAG
+```
 
 ### 1. 创建虚拟环境
 
@@ -97,6 +105,16 @@ python -m uvicorn app.main:app --reload
 5. 查看回答及其引用的来源文件。
 6. 如果修改了分块配置或索引状态异常，可点击“重建索引”重新建立索引。
 
+### 修改 RAG 数据库保存位置
+
+在页面的“RAG 数据库位置”区域输入运行应用的电脑上的目录，例如：
+
+```text
+A:\rag-data
+```
+
+点击“保存位置”后，后续导入的文档会保存到该目录下的 `uploads` 子目录，Chroma 向量索引会保存到 `chroma` 子目录。页面的索引状态区域会显示当前实际使用的绝对路径。切换目录不会自动移动旧目录中的数据；如需继续使用旧索引，请切回旧目录。
+
 ## 项目结构
 
 ```text
@@ -134,6 +152,7 @@ python -m compileall -q app tests
 | --- | --- | --- |
 | `GET` | `/` | Web 页面 |
 | `GET` | `/api/status` | 查看索引状态和模型配置 |
+| `POST` | `/api/settings/data-dir` | 切换 RAG 文档和 Chroma 索引保存目录 |
 | `POST` | `/api/documents` | 上传并索引文档 |
 | `POST` | `/api/rebuild` | 重建全部文档索引 |
 | `POST` | `/api/ask` | 根据已索引文档进行问答 |
@@ -163,9 +182,34 @@ ollama pull llama3.2
 ollama pull nomic-embed-text
 ```
 
+### 找不到 `app` 模块
+
+如果看到以下错误：
+
+```text
+ModuleNotFoundError: No module named 'app'
+```
+
+通常是因为当前终端不在项目目录。请先执行：
+
+```powershell
+Set-Location A:\copilot_home\RAG
+python -m uvicorn app.main:app --reload
+```
+
+也可以不切换目录，直接指定应用目录：
+
+```powershell
+python -m uvicorn --app-dir A:\copilot_home\RAG app.main:app --reload
+```
+
 ### 文档重复导入
 
 应用会根据文件内容计算唯一标识。同一份内容重复上传时会提示已经导入，不会重复写入索引。
+
+### `/api/ask` 返回 400
+
+当问题为空或只包含空格时，接口会返回 HTTP 400，这是输入校验，不是服务故障。请先在问答框输入问题。页面会在发送请求前直接提示“请输入问题后再提问”，不会再发送空问题请求。
 
 ### 数据目录
 
