@@ -44,19 +44,24 @@ class OllamaClient:
             raise OllamaUnavailableError("Ollama 未返回有效的文档向量。")
         return embeddings
 
-    def answer(self, question: str, context: str) -> str:
+    def answer(
+        self,
+        question: str,
+        context: str,
+        system_prompt: str,
+        conversation_context: str = "",
+    ) -> str:
         self.check_models()
-        prompt = (
-            "你是一个本地文档问答助手。仅根据下面提供的资料回答问题；"
-            "资料不足时明确说“文档中没有足够信息”，不要编造。用中文简洁回答。\n\n"
-            f"资料：\n{context}\n\n问题：{question}"
-        )
+        prompt = f"{conversation_context}\n\n资料：\n{context}\n\n问题：{question}".strip()
         result = self._request(
             "POST",
             "/api/chat",
             json={
                 "model": self.chat_model,
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt},
+                ],
                 "stream": False,
             },
         )
@@ -65,3 +70,24 @@ class OllamaClient:
             raise OllamaUnavailableError("Ollama 未返回有效回答。")
         return content
 
+    def summarize(self, conversation: str) -> str:
+        self.check_models()
+        result = self._request(
+            "POST",
+            "/api/chat",
+            json={
+                "model": self.chat_model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "你是对话摘要助手。请用中文准确压缩对话，保留用户目标、关键事实、决定和待办事项，不要添加对话中没有的信息。",
+                    },
+                    {"role": "user", "content": conversation},
+                ],
+                "stream": False,
+            },
+        )
+        content = result.get("message", {}).get("content", "").strip()
+        if not content:
+            raise OllamaUnavailableError("Ollama 未返回有效的对话摘要。")
+        return content
